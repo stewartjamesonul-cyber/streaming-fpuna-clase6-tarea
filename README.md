@@ -79,3 +79,24 @@ Entregar un repositorio propio que incluya:
 
 No modificar `data/payments.jsonl`; puede agregarse un conjunto de datos
 adicional para las pruebas.
+
+
+---
+
+## Decisiones de Diseño y Resumen Técnico
+
+### 1. Tiempo de Evento y Ventanas Fijas (Fixed Windows)
+- Se utiliza `event_time` extraído con `parse_utc` como el timestamp de dominio para garantizar determinismo sin importar el orden de llegada.
+- Se configuran ventanas fijas (`FixedWindows`) de 60 segundos con un `allowed_lateness` de 120 segundos.
+
+### 2. Deduplicación con Estado y Expiración (Timers)
+- Para la deduplicación por clave se utiliza `SetStateSpec` agrupado por `merchant_id`.
+- Para evitar que el estado crezca indefinidamente (*memory leaks*), se implementa un `TimerSpec` configurado en el tiempo de evento (`TimeDomain.WATERMARK`) alineado al final de la ventana más la lateness permitida, limpiando el estado acumulado con `@on_timer`.
+
+### 3. Manejo de Datos Tardíos y Triggers
+- Se utiliza una política de triggers `AfterWatermark(early=..., late=AfterCount(1))` en modo acumulativo (`AccumulationMode.ACCUMULATING`).
+- Esto permite emitir paneles intermedios y de revisión cuando llegan eventos fuera de orden o tardíos dentro de la ventana de tolerancia.
+
+### 4. Idempotencia y Reintentos
+- Para evitar duplicación de datos al escribir en sinks externos ante fallos de red o reintentos de procesamiento, se construye una clave idempotente determinista con el formato `merchant_id|window_start`.
+- En un escenario real o simulado, esta clave permite operaciones de tipo `UPSERT`, garantizando que reescrituras de la misma ventana mantengan la consistencia y converjan a un único registro final.
